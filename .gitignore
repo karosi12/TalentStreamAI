@@ -63,3 +63,12 @@ htmlcov/
 
 # Backend local data (sqlite, uploads)
 backend/.data/
+
+# Lambda packages
+lambda-deployment.zip
+lambda-package/
+
+# AWS
+.aws/
+terraform/backend-setup.tf
+terraform/github-oidc.tf

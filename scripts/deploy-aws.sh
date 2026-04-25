@@ -1,49 +1,64 @@
-#!/usr/bin/env bash
-set -euo pipefail
+#!/bin/bash
+set -e
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-TF_DIR="$ROOT/terraform"
-ENVIRONMENT="${TF_ENVIRONMENT:-${1:-dev}}"
+ENVIRONMENT=${1:-dev}          # dev | test | prod
+PROJECT_NAME=${2:-talentstreamai}
 
-if ! command -v terraform >/dev/null 2>&1; then
-  echo "Terraform is not installed or not on PATH."
-  exit 1
-fi
+echo "🚀 Deploying ${PROJECT_NAME} to ${ENVIRONMENT}..."
 
-if ! command -v aws >/dev/null 2>&1; then
-  echo "AWS CLI is not installed. Install it and configure credentials before using remote state."
-  exit 1
-fi
+# 1. Build Lambda package
+cd "$(dirname "$0")/.."        # project root
+echo "📦 Building Lambda package..."
+(cd backend && uv run deploy.py)
 
-case "$ENVIRONMENT" in
-  dev | staging | prod) ;;
-  *)
-    echo "Invalid environment: $ENVIRONMENT (expected dev, staging, or prod)"
-    exit 1
-    ;;
-esac
+# 2. Terraform workspace & apply
+cd terraform
+# terraform init -input=false
+AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+AWS_REGION=${DEFAULT_AWS_REGION:-us-east-1}
+terraform init -input=false \
+  -backend-config="bucket=talentstreamai-terraform-state-${AWS_ACCOUNT_ID}" \
+  -backend-config="key=${ENVIRONMENT}/terraform.tfstate" \
+  -backend-config="region=${AWS_REGION}" \
+  -backend-config="dynamodb_table=talentstreamai-terraform-locks" \
+  -backend-config="encrypt=true"
 
-cd "$TF_DIR"
-
-if [ -f backend.hcl ]; then
-  terraform init -input=false -backend-config=backend.hcl
-elif [ "${TALENTSTREAM_USE_LOCAL_TF_STATE:-}" = "1" ]; then
-  echo "Using local Terraform state (TALENTSTREAM_USE_LOCAL_TF_STATE=1)."
-  terraform init -input=false -backend=false
+if ! terraform workspace list | grep -q "$ENVIRONMENT"; then
+  terraform workspace new "$ENVIRONMENT"
 else
-  echo "Missing $TF_DIR/backend.hcl"
-  echo "Copy backend.hcl.example to backend.hcl and fill in your S3 remote state settings,"
-  echo "or export TALENTSTREAM_USE_LOCAL_TF_STATE=1 for a disposable local state file."
-  exit 1
+  terraform workspace select "$ENVIRONMENT"
 fi
 
-if [ ! -f terraform.tfvars ]; then
-  echo "Missing terraform.tfvars in $TF_DIR"
-  echo "Copy terraform.tfvars.example to terraform.tfvars, adjust values, then rerun."
-  exit 1
+# Use prod.tfvars for production environment
+if [ "$ENVIRONMENT" = "prod" ]; then
+  TF_APPLY_CMD=(terraform apply -var-file=prod.tfvars -var="project_name=$PROJECT_NAME" -var="environment=$ENVIRONMENT" -auto-approve)
+else
+  TF_APPLY_CMD=(terraform apply -var="project_name=$PROJECT_NAME" -var="environment=$ENVIRONMENT" -auto-approve)
 fi
 
-terraform plan -var="environment=${ENVIRONMENT}" -out=tfplan
-echo
-echo "Scaffold: there are no resources in main.tf yet. When you add them, review the plan and run:"
-echo "  terraform apply tfplan"
+echo "🎯 Applying Terraform..."
+"${TF_APPLY_CMD[@]}"
+
+API_URL=$(terraform output -raw api_gateway_url)
+FRONTEND_BUCKET=$(terraform output -raw s3_frontend_bucket)
+CUSTOM_URL=$(terraform output -raw custom_domain_url 2>/dev/null || true)
+
+# 3. Build + deploy frontend
+cd ../frontend
+
+# Create production environment file with API URL
+echo "📝 Setting API URL for production..."
+echo "NEXT_PUBLIC_API_URL=$API_URL" > .env.production
+
+npm install
+npm run build
+aws s3 sync ./out "s3://$FRONTEND_BUCKET/" --delete
+cd ..
+
+# 4. Final messages
+echo -e "\n✅ Deployment complete!"
+echo "🌐 CloudFront URL : $(terraform -chdir=terraform output -raw cloudfront_url)"
+if [ -n "$CUSTOM_URL" ]; then
+  echo "🔗 Custom domain  : $CUSTOM_URL"
+fi
+echo "📡 API Gateway    : $API_URL"
