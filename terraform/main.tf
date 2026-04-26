@@ -1,6 +1,11 @@
 # Data source to get current AWS account ID
 data "aws_caller_identity" "current" {}
 
+# Check Lambda deployment package size to determine if we need to use S3
+data "external" "lambda_package_size" {
+  program = ["bash", "${path.module}/check_lambda_size.sh"]
+}
+
 locals {
   aliases = var.use_custom_domain && var.root_domain != "" ? [
     var.root_domain,
@@ -109,39 +114,64 @@ resource "aws_iam_role_policy_attachment" "lambda_basic" {
   role       = aws_iam_role.lambda_role.name
 }
 
-resource "aws_iam_role_policy_attachment" "lambda_bedrock" {
-  policy_arn = "arn:aws:iam::aws:policy/AmazonBedrockFullAccess"
-  role       = aws_iam_role.lambda_role.name
-}
-
 resource "aws_iam_role_policy_attachment" "lambda_s3" {
   policy_arn = "arn:aws:iam::aws:policy/AmazonS3FullAccess"
   role       = aws_iam_role.lambda_role.name
 }
 
+locals {
+  lambda_s3_key    = "lambda-deployment.zip"
+  lambda_bucket    = "${local.name_prefix}-${data.aws_caller_identity.current.account_id}"
+
+  use_s3_object = data.external.lambda_package_size.result.use_s3 == "true" ? true : false
+}
+
+locals {
+  s3_object_exists = local.use_s3_object && length(data.aws_s3_object.lambda_zip) > 0
+}
+
+data "aws_s3_object" "lambda_zip" {
+  count  = local.use_s3_object ? 1 : 0
+
+  bucket = local.lambda_bucket
+  key    = local.lambda_s3_key
+}
+
 # Lambda function
 resource "aws_lambda_function" "api" {
-  s3_bucket        = aws_s3_bucket.memory.id
-  s3_key           = "lambda-deployment.zip"
-  function_name    = "${local.name_prefix}-api"
-  role             = aws_iam_role.lambda_role.arn
-  handler          = "lambda_handler.handler"
+  function_name = "${local.name_prefix}-api"
+  role          = aws_iam_role.lambda_role.arn
+  handler       = "lambda_handler.handler"
+
+  # Conditional S3 vs local file
+  filename  = local.s3_object_exists ? null : "${path.module}/../backend/lambda-deployment.zip"
+  s3_bucket = local.s3_object_exists ? local.lambda_bucket : null
+  s3_key    = local.s3_object_exists ? local.lambda_s3_key : null
+
   source_code_hash = filebase64sha256("${path.module}/../backend/lambda-deployment.zip")
-  runtime          = "python3.12"
-  architectures    = ["x86_64"]
-  timeout          = var.lambda_timeout
-  tags             = local.common_tags
+
+  runtime       = "python3.12"
+  architectures = ["x86_64"]
+  timeout       = var.lambda_timeout
+  tags          = local.common_tags
+
+   lifecycle {
+     ignore_changes = []
+   }
 
   environment {
     variables = {
-      CORS_ORIGINS     = var.use_custom_domain ? "https://${var.root_domain},https://www.${var.root_domain}" : "https://${aws_cloudfront_distribution.main.domain_name}"
-      S3_BUCKET        = aws_s3_bucket.memory.id
-      USE_S3           = "true"
+      CORS_ORIGINS = var.use_custom_domain ? "https://${var.root_domain},https://www.${var.root_domain}" : "https://${aws_cloudfront_distribution.main.domain_name}"
+      S3_BUCKET    = aws_s3_bucket.memory.id
+      USE_S3       = tostring(local.use_s3_object)
+      OPENAI_API_KEY = var.openai_api_key
     }
   }
 
-  # Ensure Lambda waits for the distribution to exist
-  depends_on = [aws_cloudfront_distribution.main, aws_s3_bucket.memory]
+  depends_on = [
+    aws_cloudfront_distribution.main,
+    aws_s3_bucket.memory
+  ]
 }
 
 # API Gateway HTTP API
@@ -153,7 +183,7 @@ resource "aws_apigatewayv2_api" "main" {
   cors_configuration {
     allow_credentials = false
     allow_headers     = ["*"]
-    allow_methods     = ["GET", "POST", "OPTIONS"]
+    allow_methods     = ["GET", "POST", "OPTIONS", "PATCH"]
     allow_origins     = ["*"]
     max_age           = 300
   }
@@ -184,15 +214,108 @@ resource "aws_apigatewayv2_route" "get_root" {
   target    = "integrations/${aws_apigatewayv2_integration.lambda.id}"
 }
 
-resource "aws_apigatewayv2_route" "post_chat" {
+#profile routes
+resource "aws_apigatewayv2_route" "get_profile" {
   api_id    = aws_apigatewayv2_api.main.id
-  route_key = "POST /chat"
+  route_key = "GET /api/v1/profile"
+  target    = "integrations/${aws_apigatewayv2_integration.lambda.id}"
+}
+resource "aws_apigatewayv2_route" "patch_profile" {
+  api_id    = aws_apigatewayv2_api.main.id
+  route_key = "PATCH /api/v1/profile"
   target    = "integrations/${aws_apigatewayv2_integration.lambda.id}"
 }
 
+resource "aws_apigatewayv2_route" "post_profile_base_resume" {
+  api_id    = aws_apigatewayv2_api.main.id
+  route_key = "POST /api/v1/profile/base-resume"
+  target    = "integrations/${aws_apigatewayv2_integration.lambda.id}"
+}
+
+# heath check routes
 resource "aws_apigatewayv2_route" "get_health" {
   api_id    = aws_apigatewayv2_api.main.id
-  route_key = "GET /health"
+  route_key = "GET /api/v1/health"
+  target    = "integrations/${aws_apigatewayv2_integration.lambda.id}"
+}
+resource "aws_apigatewayv2_route" "get_ready" {
+  api_id    = aws_apigatewayv2_api.main.id
+  route_key = "GET /api/v1/ready"
+  target    = "integrations/${aws_apigatewayv2_integration.lambda.id}"
+}
+
+#auth route
+resource "aws_apigatewayv2_route" "get_auth_me" {
+  api_id    = aws_apigatewayv2_api.main.id
+  route_key = "GET /api/v1/auth/me"
+  target    = "integrations/${aws_apigatewayv2_integration.lambda.id}"
+}
+
+#dashboard route
+resource "aws_apigatewayv2_route" "get_dashboard" {
+  api_id    = aws_apigatewayv2_api.main.id
+  route_key = "GET /api/v1/dashboard/stats"
+  target    = "integrations/${aws_apigatewayv2_integration.lambda.id}"
+}
+
+#applications routes
+resource "aws_apigatewayv2_route" "get_applications" {
+  api_id    = aws_apigatewayv2_api.main.id  
+  route_key = "GET /api/v1/applications"
+  target    = "integrations/${aws_apigatewayv2_integration.lambda.id}"
+}
+resource "aws_apigatewayv2_route" "get_one_application" {
+  api_id    = aws_apigatewayv2_api.main.id  
+  route_key = "GET /api/v1/applications/{application_id}"
+  target    = "integrations/${aws_apigatewayv2_integration.lambda.id}"
+}
+resource "aws_apigatewayv2_route" "post_applications" {
+  api_id    = aws_apigatewayv2_api.main.id  
+  route_key = "POST /api/v1/applications/tailor"
+  target    = "integrations/${aws_apigatewayv2_integration.lambda.id}"
+}
+
+#resume routes
+resource "aws_apigatewayv2_route" "get_resumes" {
+  api_id    = aws_apigatewayv2_api.main.id  
+  route_key = "GET /api/v1/resumes"
+  target    = "integrations/${aws_apigatewayv2_integration.lambda.id}"
+}
+
+resource "aws_apigatewayv2_route" "post_resumes" {
+  api_id    = aws_apigatewayv2_api.main.id  
+  route_key = "POST /api/v1/resumes"
+  target    = "integrations/${aws_apigatewayv2_integration.lambda.id}"
+}
+
+resource "aws_apigatewayv2_route" "get_one_resume" {
+  api_id    = aws_apigatewayv2_api.main.id  
+  route_key = "GET /api/v1/resumes/{resume_id}"
+  target    = "integrations/${aws_apigatewayv2_integration.lambda.id}"
+}
+
+#job description routes
+resource "aws_apigatewayv2_route" "post_job_descriptions" {
+  api_id    = aws_apigatewayv2_api.main.id  
+  route_key = "POST /api/v1/job-descriptions"
+  target    = "integrations/${aws_apigatewayv2_integration.lambda.id}"
+}
+
+resource "aws_apigatewayv2_route" "get_job_descriptions" {
+  api_id    = aws_apigatewayv2_api.main.id  
+  route_key = "GET /api/v1/job-descriptions/{job_description_id}"
+  target    = "integrations/${aws_apigatewayv2_integration.lambda.id}"
+}
+
+# generation
+resource "aws_apigatewayv2_route" "post_generation" {
+  api_id    = aws_apigatewayv2_api.main.id  
+  route_key = "POST /api/v1/generate/stream"
+  target    = "integrations/${aws_apigatewayv2_integration.lambda.id}"
+}
+resource "aws_apigatewayv2_route" "post_generate_missing_skills" {
+  api_id    = aws_apigatewayv2_api.main.id  
+  route_key = "POST /api/v1/generate/with-missing-skills"
   target    = "integrations/${aws_apigatewayv2_integration.lambda.id}"
 }
 
