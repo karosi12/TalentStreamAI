@@ -47,7 +47,7 @@ echo "📦 Emptying S3 buckets..."
 # Get bucket names with account ID (matching Day 4 naming)
 FRONTEND_BUCKET="${PROJECT_NAME}-${ENVIRONMENT}-frontend-${AWS_ACCOUNT_ID}"
 MEMORY_BUCKET="${PROJECT_NAME}-${ENVIRONMENT}-memory-${AWS_ACCOUNT_ID}"
-
+OPENAI_API_KEY=${OPENAI_API_KEY}
 # Empty frontend bucket if it exists
 if aws s3 ls "s3://$FRONTEND_BUCKET" 2>/dev/null; then
     echo "  Emptying $FRONTEND_BUCKET..."
@@ -76,7 +76,7 @@ fi
 if [ "$ENVIRONMENT" = "prod" ] && [ -f "prod.tfvars" ]; then
     terraform destroy -var-file=prod.tfvars -var="project_name=$PROJECT_NAME" -var="environment=$ENVIRONMENT" -auto-approve
 else
-    terraform destroy -var="project_name=$PROJECT_NAME" -var="environment=$ENVIRONMENT" -auto-approve
+    terraform destroy -var="openai_api_key=$OPENAI_API_KEY" -var="project_name=$PROJECT_NAME" -var="environment=$ENVIRONMENT" -auto-approve
 fi
 
 echo "✅ Infrastructure for ${ENVIRONMENT} has been destroyed!"
