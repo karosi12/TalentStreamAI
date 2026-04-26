@@ -64,6 +64,7 @@ jobs:
           export AWS_ACCOUNT_ID=${{ secrets.AWS_ACCOUNT_ID }}
           export DEFAULT_AWS_REGION=${{ secrets.DEFAULT_AWS_REGION }}
           export OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}
+          export NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
           
           # Make script executable and run it
           chmod +x scripts/deploy-aws.sh
