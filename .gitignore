@@ -72,3 +72,7 @@ lambda-package/
 .aws/
 terraform/backend-setup.tf
 terraform/github-oidc.tf
+terraform/backend-setup.tf.bak
+terraform/backend.tf.bak
+terraform/.terraform.lock.hcl
+note.md

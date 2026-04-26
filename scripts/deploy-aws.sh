@@ -11,14 +11,47 @@ cd "$(dirname "$0")/.."        # project root
 echo "📦 Building Lambda package..."
 (cd backend && uv run deploy.py)
 
+# Check if Lambda package exceeds 50MB and upload to S3 if needed
+LAMBDA_ZIP_PATH="backend/lambda-deployment.zip"
+if [[ -f "$LAMBDA_ZIP_PATH" ]]; then
+  # Get file size in MB
+  SIZE_MB=$(du -m "$LAMBDA_ZIP_PATH" | cut -f1)
+  echo "📏 Lambda package size: ${SIZE_MB} MB"
+  
+  if [[ $SIZE_MB -gt 50 ]]; then
+    echo "⚠️  Lambda package exceeds 50 MB limit, uploading to S3..."
+    
+    # Get AWS account ID for S3 bucket naming
+    AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+    
+     # Construct S3 bucket name (matches Terraform configuration for Lambda zip storage)
+     S3_BUCKET="${PROJECT_NAME}-${ENVIRONMENT}-${AWS_ACCOUNT_ID}"
+    
+    echo "📤 Uploading to S3 bucket: $S3_BUCKET"
+    aws s3 cp "$LAMBDA_ZIP_PATH" "s3://$S3_BUCKET/lambda-deployment.zip"
+    
+    if [[ $? -eq 0 ]]; then
+      echo "✅ Successfully uploaded Lambda package to S3"
+    else
+      echo "❌ Failed to upload Lambda package to S3"
+      exit 1
+    fi
+  else
+    echo "✅ Lambda package is within limits (< 50 MB)"
+  fi
+else
+  echo "⚠️  Lambda package not found at $LAMBDA_ZIP_PATH"
+fi
+
 # 2. Terraform workspace & apply
 cd terraform
 # terraform init -input=false
 AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
 AWS_REGION=${DEFAULT_AWS_REGION:-us-east-1}
+ENVIRONMENT=${ENVIRONMENT:-dev}
 terraform init -input=false \
   -backend-config="bucket=talentstreamai-terraform-state-${AWS_ACCOUNT_ID}" \
-  -backend-config="key=${ENVIRONMENT}/terraform.tfstate" \
+  -backend-config="key=talentstreamai/${ENVIRONMENT}/terraform.tfstate" \
   -backend-config="region=${AWS_REGION}" \
   -backend-config="dynamodb_table=talentstreamai-terraform-locks" \
   -backend-config="encrypt=true"
