@@ -48,7 +48,7 @@ cd terraform
 # terraform init -input=false
 AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
 AWS_REGION=${DEFAULT_AWS_REGION:-us-east-1}
-ENVIRONMENT=${ENVIRONMENT:-dev}
+OPENAI_API_KEY=${OPENAI_API_KEY}
 terraform init -input=false \
   -backend-config="bucket=talentstreamai-terraform-state-${AWS_ACCOUNT_ID}" \
   -backend-config="key=talentstreamai/${ENVIRONMENT}/terraform.tfstate" \
@@ -66,7 +66,7 @@ fi
 if [ "$ENVIRONMENT" = "prod" ]; then
   TF_APPLY_CMD=(terraform apply -var-file=prod.tfvars -var="project_name=$PROJECT_NAME" -var="environment=$ENVIRONMENT" -auto-approve)
 else
-  TF_APPLY_CMD=(terraform apply -var="project_name=$PROJECT_NAME" -var="environment=$ENVIRONMENT" -auto-approve)
+  TF_APPLY_CMD=(terraform apply -var="project_name=$PROJECT_NAME" -var="openai_api_key=$OPENAI_API_KEY" -var="environment=$ENVIRONMENT" -auto-approve)
 fi
 
 echo "🎯 Applying Terraform..."
