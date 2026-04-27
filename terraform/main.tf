@@ -190,17 +190,6 @@ resource "aws_lambda_function" "api" {
   ]
 }
 
-resource "aws_lambda_alias" "live" {
-  name             = "live"
-  function_name    = aws_lambda_function.api.function_name
-  function_version = "$LATEST"
-}
-
-resource "aws_lambda_provisioned_concurrency_config" "api_pc" {
-  function_name                     = aws_lambda_function.api.function_name
-  qualifier                         = aws_lambda_alias.live.name
-  provisioned_concurrent_executions = 10
-}
 
 # API Gateway HTTP API
 resource "aws_apigatewayv2_api" "main" {
