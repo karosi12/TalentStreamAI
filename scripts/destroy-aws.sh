@@ -26,7 +26,7 @@ AWS_REGION=${DEFAULT_AWS_REGION:-us-east-1}
 echo "🔧 Initializing Terraform with S3 backend..."
 terraform init -input=false \
   -backend-config="bucket=talentstreamai-terraform-state-${AWS_ACCOUNT_ID}" \
-  -backend-config="key=${ENVIRONMENT}/terraform.tfstate" \
+  -backend-config="key=talentstreamai/${ENVIRONMENT}/terraform.tfstate" \
   -backend-config="region=${AWS_REGION}" \
   -backend-config="dynamodb_table=talentstreamai-terraform-locks" \
   -backend-config="encrypt=true"
@@ -48,6 +48,9 @@ echo "📦 Emptying S3 buckets..."
 FRONTEND_BUCKET="${PROJECT_NAME}-${ENVIRONMENT}-frontend-${AWS_ACCOUNT_ID}"
 MEMORY_BUCKET="${PROJECT_NAME}-${ENVIRONMENT}-memory-${AWS_ACCOUNT_ID}"
 OPENAI_API_KEY=${OPENAI_API_KEY}
+NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=${NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY}
+CLERK_JWKS_URL=${CLERK_JWKS_URL}
+          
 # Empty frontend bucket if it exists
 if aws s3 ls "s3://$FRONTEND_BUCKET" 2>/dev/null; then
     echo "  Emptying $FRONTEND_BUCKET..."
@@ -72,11 +75,23 @@ if [ ! -f "../backend/lambda-deployment.zip" ]; then
     echo "dummy" | zip ../backend/lambda-deployment.zip -
 fi
 
+cat > lambda-function-vars.tfvars <<EOF
+aws_region = "${DEFAULT_AWS_REGION:-us-east-1}"
+openai_api_key = "${OPENAI_API_KEY}"
+clerk_jwks_url = "${CLERK_JWKS_URL}"
+clerk_issuer = "${CLERK_ISSUER}"
+agent_mode = "${AGENT_MODE}"
+llm_base_url = "${LLM_BASE_URL}"
+s3_prefix = "${S3_PREFIX}"
+s3_sse = "${S3_SSE}"
+upload_storage = "${UPLOAD_STORAGE}"
+EOF
+
 # Run terraform destroy with auto-approve
 if [ "$ENVIRONMENT" = "prod" ] && [ -f "prod.tfvars" ]; then
     terraform destroy -var-file=prod.tfvars -var="project_name=$PROJECT_NAME" -var="environment=$ENVIRONMENT" -auto-approve
 else
-    terraform destroy -var="openai_api_key=$OPENAI_API_KEY" -var="project_name=$PROJECT_NAME" -var="environment=$ENVIRONMENT" -auto-approve
+    terraform destroy -var-file=lambda-function-vars.tfvars -var="project_name=$PROJECT_NAME" -var="environment=$ENVIRONMENT" -auto-approve
 fi
 
 echo "✅ Infrastructure for ${ENVIRONMENT} has been destroyed!"

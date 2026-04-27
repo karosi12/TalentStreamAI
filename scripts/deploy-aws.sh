@@ -49,7 +49,15 @@ cd terraform
 AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
 AWS_REGION=${DEFAULT_AWS_REGION:-us-east-1}
 OPENAI_API_KEY=${OPENAI_API_KEY}
-terraform init -input=false \
+CLERK_JWKS_URL=${CLERK_JWKS_URL}
+CLERK_ISSUER=${CLERK_ISSUER}
+AGENT_MODE=${AGENT_MODE}
+LLM_BASE_URL=${LLM_BASE_URL}
+S3_PREFIX=${S3_PREFIX}
+S3_SSE=${S3_SSE}
+UPLOAD_STORAGE=${UPLOAD_STORAGE}
+
+terraform fmt && terraform init -input=false \
   -backend-config="bucket=talentstreamai-terraform-state-${AWS_ACCOUNT_ID}" \
   -backend-config="key=talentstreamai/${ENVIRONMENT}/terraform.tfstate" \
   -backend-config="region=${AWS_REGION}" \
@@ -62,11 +70,23 @@ else
   terraform workspace select "$ENVIRONMENT"
 fi
 
+cat > lambda-function-vars.tfvars <<EOF
+aws_region = "${DEFAULT_AWS_REGION:-us-east-1}"
+openai_api_key = "${OPENAI_API_KEY}"
+clerk_jwks_url = "${CLERK_JWKS_URL}"
+clerk_issuer = "${CLERK_ISSUER}"
+agent_mode = "${AGENT_MODE}"
+llm_base_url = "${LLM_BASE_URL}"
+s3_prefix = "${S3_PREFIX}"
+s3_sse = "${S3_SSE}"
+upload_storage = "${UPLOAD_STORAGE}"
+EOF
+
 # Use prod.tfvars for production environment
 if [ "$ENVIRONMENT" = "prod" ]; then
   TF_APPLY_CMD=(terraform apply -var-file=prod.tfvars -var="project_name=$PROJECT_NAME" -var="environment=$ENVIRONMENT" -auto-approve)
 else
-  TF_APPLY_CMD=(terraform apply -var="project_name=$PROJECT_NAME" -var="openai_api_key=$OPENAI_API_KEY" -var="environment=$ENVIRONMENT" -auto-approve)
+  TF_APPLY_CMD=(terraform apply -var-file=lambda-function-vars.tfvars -var="project_name=$PROJECT_NAME" -var="environment=$ENVIRONMENT" -auto-approve)
 fi
 
 echo "🎯 Applying Terraform..."
@@ -82,6 +102,8 @@ cd ../frontend
 # Create production environment file with API URL
 echo "📝 Setting API URL for production..."
 echo "NEXT_PUBLIC_API_URL=$API_URL" > .env.production
+echo "NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=$NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY" >> .env.production
+echo "CLERK_SECRET_KEY=$CLERK_SECRET_KEY" >> .env.production
 
 npm install
 npm run build
