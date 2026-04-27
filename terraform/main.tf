@@ -163,7 +163,6 @@ resource "aws_lambda_function" "api" {
   timeout                        = var.lambda_timeout
   tags                           = local.common_tags
   memory_size                    = var.memory_size
-  reserved_concurrent_executions = 50
 
   lifecycle {
     ignore_changes = []

@@ -34,13 +34,13 @@ variable "memory_size" {
 variable "api_throttle_burst_limit" {
   description = "API Gateway throttle burst limit"
   type        = number
-  default     = 100
+  default     = 10
 }
 
 variable "api_throttle_rate_limit" {
   description = "API Gateway throttle rate limit"
   type        = number
-  default     = 50
+  default     = 5
 }
 
 variable "use_custom_domain" {
@@ -76,26 +76,31 @@ variable "clerk_issuer" {
 }
 
 variable "agent_mode" {
-  description = "Agent mode"
+  description = "Agent mode (stub|llm)"
   type        = string
+  default     = "llm"
 }
 
 variable "llm_base_url" {
   description = "LLM base URL"
   type        = string
+  default     = "https://api.openai.com"
+}
+
+variable "upload_storage" {
+  description = "Upload storage (none|local|s3)"
+  type        = string
+  default     = "s3"
 }
 
 variable "s3_prefix" {
   description = "S3 prefix"
   type        = string
+  default     = "uploads/"
 }
 
 variable "s3_sse" {
   description = "S3 SSE"
   type        = string
-}
-
-variable "upload_storage" {
-  description = "Upload storage"
-  type        = string
+  default     = "AES256"
 }
