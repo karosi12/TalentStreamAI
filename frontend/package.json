@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "dotenv -e .env.production  -- next dev",
+    "dev": "dotenv -e .././.env  -- next dev",
     "build": "dotenv -e .env.production -- sh -c 'export NEXT_STATIC_EXPORT=1 && next build'",
     "start": "dotenv -e .env.production -- npx --yes serve@14 out -l 3000",
     "lint": "next lint"
