@@ -158,11 +158,12 @@ resource "aws_lambda_function" "api" {
 
   source_code_hash = filebase64sha256("${path.module}/../backend/lambda-deployment.zip")
 
-  runtime       = "python3.12"
-  architectures = ["x86_64"]
-  timeout       = var.lambda_timeout
-  tags          = local.common_tags
-  memory_size   = var.memory_size
+  runtime                        = "python3.12"
+  architectures                  = ["x86_64"]
+  timeout                        = var.lambda_timeout
+  tags                           = local.common_tags
+  memory_size                    = var.memory_size
+  reserved_concurrent_executions = 50
 
   lifecycle {
     ignore_changes = []
@@ -188,6 +189,18 @@ resource "aws_lambda_function" "api" {
     aws_cloudfront_distribution.main,
     aws_s3_bucket.resume_storage
   ]
+}
+
+resource "aws_lambda_alias" "live" {
+  name             = "live"
+  function_name    = aws_lambda_function.api.function_name
+  function_version = "$LATEST"
+}
+
+resource "aws_lambda_provisioned_concurrency_config" "api_pc" {
+  function_name                     = aws_lambda_function.api.function_name
+  qualifier                         = aws_lambda_alias.live.name
+  provisioned_concurrent_executions = 10
 }
 
 # API Gateway HTTP API
