@@ -21,7 +21,14 @@ variable "environment" {
 variable "lambda_timeout" {
   description = "Lambda function timeout in seconds"
   type        = number
-  default     = 60
+  default     = 120
+}
+
+variable "memory_size" {
+  description = "Lambda function memory size in MB"
+  type        = number
+  default     = 512
+
 }
 
 variable "api_throttle_burst_limit" {
