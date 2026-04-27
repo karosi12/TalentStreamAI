@@ -20,6 +20,7 @@ dependencies = [
   "prometheus-client==0.21.1",
   "beautifulsoup4==4.12.3",
   "langfuse>=4.5.0",
+  "mangum==0.21.0",
 ]
 
 [tool.uv]

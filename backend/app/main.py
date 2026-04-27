@@ -93,3 +93,7 @@ app.include_router(api_router, prefix="/api")
 @app.get("/")
 def root() -> dict[str, str]:
     return {"service": "talentstreamai-api", "docs": "/docs"}
+
+# AWS Lambda handler using Mangum
+from mangum import Mangum
+handler = Mangum(app)
