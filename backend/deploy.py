@@ -94,7 +94,7 @@ def main():
     # You can pass these dynamically if needed
     project_name = os.getenv("PROJECT_NAME", "talentstreamai")
     environment = os.getenv("ENVIRONMENT", "dev")
-    account_id = os.getenv("ACCOUNT_ID", "123456789012")
+    account_id = os.getenv("AWS_ACCOUNT_ID", "123456789012")
 
     bucket_name = f"{project_name}-{environment}-{account_id}"
     s3_key = "lambda-deployment.zip"

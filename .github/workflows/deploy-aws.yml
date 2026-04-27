@@ -72,6 +72,7 @@ jobs:
           export S3_PREFIX=${{ secrets.S3_PREFIX }}
           export S3_SSE=${{ secrets.S3_SSE }}
           export UPLOAD_STORAGE=${{ secrets.UPLOAD_STORAGE }}
+          export ENVIRONMENT=${{ github.event.inputs.environment || 'dev' }}
           
           # Make script executable and run it
           chmod +x scripts/deploy-aws.sh
