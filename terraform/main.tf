@@ -158,12 +158,11 @@ resource "aws_lambda_function" "api" {
 
   source_code_hash = filebase64sha256("${path.module}/../backend/lambda-deployment.zip")
 
-  runtime                        = "python3.12"
-  architectures                  = ["x86_64"]
-  timeout                        = var.lambda_timeout
-  tags                           = local.common_tags
-  memory_size                    = var.memory_size
-  reserved_concurrent_executions = 50
+  runtime       = "python3.12"
+  architectures = ["x86_64"]
+  timeout       = var.lambda_timeout
+  tags          = local.common_tags
+  memory_size   = var.memory_size
 
   lifecycle {
     ignore_changes = []
