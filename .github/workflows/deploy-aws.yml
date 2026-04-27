@@ -65,6 +65,13 @@ jobs:
           export DEFAULT_AWS_REGION=${{ secrets.DEFAULT_AWS_REGION }}
           export OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}
           export NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
+          export CLERK_JWKS_URL=${{ secrets.CLERK_JWKS_URL }}
+          export CLERK_ISSUER=${{ secrets.CLERK_ISSUER }}
+          export AGENT_MODE=${{ secrets.AGENT_MODE }}
+          export LLM_BASE_URL=${{ secrets.LLM_BASE_URL }}
+          export S3_PREFIX=${{ secrets.S3_PREFIX }}
+          export S3_SSE=${{ secrets.S3_SSE }}
+          export UPLOAD_STORAGE=${{ secrets.UPLOAD_STORAGE }}
           
           # Make script executable and run it
           chmod +x scripts/deploy-aws.sh

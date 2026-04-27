@@ -21,14 +21,15 @@ locals {
   }
 }
 
-# S3 bucket for conversation memory
-resource "aws_s3_bucket" "memory" {
-  bucket = "${local.name_prefix}-memory-${data.aws_caller_identity.current.account_id}"
+# S3 bucket for resume storage
+resource "aws_s3_bucket" "resume_storage" {
+  bucket = "${local.name_prefix}-resume-${data.aws_caller_identity.current.account_id}"
   tags   = local.common_tags
+
 }
 
-resource "aws_s3_bucket_public_access_block" "memory" {
-  bucket = aws_s3_bucket.memory.id
+resource "aws_s3_bucket_public_access_block" "resume_storage" {
+  bucket = aws_s3_bucket.resume_storage.id
 
   block_public_acls       = true
   block_public_policy     = true
@@ -36,12 +37,19 @@ resource "aws_s3_bucket_public_access_block" "memory" {
   restrict_public_buckets = true
 }
 
-resource "aws_s3_bucket_ownership_controls" "memory" {
-  bucket = aws_s3_bucket.memory.id
+resource "aws_s3_bucket_ownership_controls" "resume_storage" {
+  bucket = aws_s3_bucket.resume_storage.id
 
   rule {
     object_ownership = "BucketOwnerEnforced"
   }
+}
+
+# Ensure uploads/ folder exists in the resume storage bucket
+resource "aws_s3_object" "resume_uploads_folder" {
+  bucket = aws_s3_bucket.resume_storage.id
+  key    = "uploads/"
+  acl    = "private"
 }
 
 # S3 bucket for frontend static website
@@ -120,8 +128,8 @@ resource "aws_iam_role_policy_attachment" "lambda_s3" {
 }
 
 locals {
-  lambda_s3_key    = "lambda-deployment.zip"
-  lambda_bucket    = "${local.name_prefix}-${data.aws_caller_identity.current.account_id}"
+  lambda_s3_key = "lambda-deployment.zip"
+  lambda_bucket = "${local.name_prefix}-${data.aws_caller_identity.current.account_id}"
 
   use_s3_object = data.external.lambda_package_size.result.use_s3 == "true" ? true : false
 }
@@ -131,7 +139,7 @@ locals {
 }
 
 data "aws_s3_object" "lambda_zip" {
-  count  = local.use_s3_object ? 1 : 0
+  count = local.use_s3_object ? 1 : 0
 
   bucket = local.lambda_bucket
   key    = local.lambda_s3_key
@@ -141,7 +149,7 @@ data "aws_s3_object" "lambda_zip" {
 resource "aws_lambda_function" "api" {
   function_name = "${local.name_prefix}-api"
   role          = aws_iam_role.lambda_role.arn
-  handler       = "lambda_handler.handler"
+  handler       = "app.main.handler"
 
   # Conditional S3 vs local file
   filename  = local.s3_object_exists ? null : "${path.module}/../backend/lambda-deployment.zip"
@@ -155,22 +163,29 @@ resource "aws_lambda_function" "api" {
   timeout       = var.lambda_timeout
   tags          = local.common_tags
 
-   lifecycle {
-     ignore_changes = []
-   }
+  lifecycle {
+    ignore_changes = []
+  }
 
   environment {
     variables = {
-      CORS_ORIGINS = var.use_custom_domain ? "https://${var.root_domain},https://www.${var.root_domain}" : "https://${aws_cloudfront_distribution.main.domain_name}"
-      S3_BUCKET    = aws_s3_bucket.memory.id
-      USE_S3       = tostring(local.use_s3_object)
+      CORS_ORIGINS   = var.use_custom_domain ? "https://${var.root_domain},https://www.${var.root_domain}" : "https://${aws_cloudfront_distribution.main.domain_name}"
+      S3_BUCKET      = aws_s3_bucket.resume_storage.id
+      USE_S3         = tostring(local.use_s3_object)
       OPENAI_API_KEY = var.openai_api_key
+      CLERK_JWKS_URL = var.clerk_jwks_url
+      CLERK_ISSUER   = var.clerk_issuer
+      AGENT_MODE     = var.agent_mode
+      LLM_BASE_URL   = var.llm_base_url
+      S3_PREFIX      = var.s3_prefix
+      S3_SSE         = var.s3_sse
+      UPLOAD_STORAGE = var.upload_storage
     }
   }
 
   depends_on = [
     aws_cloudfront_distribution.main,
-    aws_s3_bucket.memory
+    aws_s3_bucket.resume_storage
   ]
 }
 
@@ -260,61 +275,61 @@ resource "aws_apigatewayv2_route" "get_dashboard" {
 
 #applications routes
 resource "aws_apigatewayv2_route" "get_applications" {
-  api_id    = aws_apigatewayv2_api.main.id  
+  api_id    = aws_apigatewayv2_api.main.id
   route_key = "GET /api/v1/applications"
   target    = "integrations/${aws_apigatewayv2_integration.lambda.id}"
 }
 resource "aws_apigatewayv2_route" "get_one_application" {
-  api_id    = aws_apigatewayv2_api.main.id  
+  api_id    = aws_apigatewayv2_api.main.id
   route_key = "GET /api/v1/applications/{application_id}"
   target    = "integrations/${aws_apigatewayv2_integration.lambda.id}"
 }
 resource "aws_apigatewayv2_route" "post_applications" {
-  api_id    = aws_apigatewayv2_api.main.id  
+  api_id    = aws_apigatewayv2_api.main.id
   route_key = "POST /api/v1/applications/tailor"
   target    = "integrations/${aws_apigatewayv2_integration.lambda.id}"
 }
 
 #resume routes
 resource "aws_apigatewayv2_route" "get_resumes" {
-  api_id    = aws_apigatewayv2_api.main.id  
+  api_id    = aws_apigatewayv2_api.main.id
   route_key = "GET /api/v1/resumes"
   target    = "integrations/${aws_apigatewayv2_integration.lambda.id}"
 }
 
 resource "aws_apigatewayv2_route" "post_resumes" {
-  api_id    = aws_apigatewayv2_api.main.id  
+  api_id    = aws_apigatewayv2_api.main.id
   route_key = "POST /api/v1/resumes"
   target    = "integrations/${aws_apigatewayv2_integration.lambda.id}"
 }
 
 resource "aws_apigatewayv2_route" "get_one_resume" {
-  api_id    = aws_apigatewayv2_api.main.id  
+  api_id    = aws_apigatewayv2_api.main.id
   route_key = "GET /api/v1/resumes/{resume_id}"
   target    = "integrations/${aws_apigatewayv2_integration.lambda.id}"
 }
 
 #job description routes
 resource "aws_apigatewayv2_route" "post_job_descriptions" {
-  api_id    = aws_apigatewayv2_api.main.id  
+  api_id    = aws_apigatewayv2_api.main.id
   route_key = "POST /api/v1/job-descriptions"
   target    = "integrations/${aws_apigatewayv2_integration.lambda.id}"
 }
 
 resource "aws_apigatewayv2_route" "get_job_descriptions" {
-  api_id    = aws_apigatewayv2_api.main.id  
+  api_id    = aws_apigatewayv2_api.main.id
   route_key = "GET /api/v1/job-descriptions/{job_description_id}"
   target    = "integrations/${aws_apigatewayv2_integration.lambda.id}"
 }
 
 # generation
 resource "aws_apigatewayv2_route" "post_generation" {
-  api_id    = aws_apigatewayv2_api.main.id  
+  api_id    = aws_apigatewayv2_api.main.id
   route_key = "POST /api/v1/generate/stream"
   target    = "integrations/${aws_apigatewayv2_integration.lambda.id}"
 }
 resource "aws_apigatewayv2_route" "post_generate_missing_skills" {
-  api_id    = aws_apigatewayv2_api.main.id  
+  api_id    = aws_apigatewayv2_api.main.id
   route_key = "POST /api/v1/generate/with-missing-skills"
   target    = "integrations/${aws_apigatewayv2_integration.lambda.id}"
 }
@@ -331,7 +346,7 @@ resource "aws_lambda_permission" "api_gw" {
 # CloudFront distribution
 resource "aws_cloudfront_distribution" "main" {
   aliases = local.aliases
-  
+
   viewer_certificate {
     acm_certificate_arn            = var.use_custom_domain ? aws_acm_certificate.site[0].arn : null
     cloudfront_default_certificate = var.use_custom_domain ? false : true

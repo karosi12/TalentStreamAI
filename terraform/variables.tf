@@ -55,5 +55,40 @@ variable "aws_region" {
 
 variable "openai_api_key" {
   description = "OPENAI api key"
-  type = string
+  type        = string
+}
+
+variable "clerk_jwks_url" {
+  description = "Clerk JWKS URL"
+  type        = string
+}
+
+variable "clerk_issuer" {
+  description = "Clerk issuer URL"
+  type        = string
+}
+
+variable "agent_mode" {
+  description = "Agent mode"
+  type        = string
+}
+
+variable "llm_base_url" {
+  description = "LLM base URL"
+  type        = string
+}
+
+variable "s3_prefix" {
+  description = "S3 prefix"
+  type        = string
+}
+
+variable "s3_sse" {
+  description = "S3 SSE"
+  type        = string
+}
+
+variable "upload_storage" {
+  description = "Upload storage"
+  type        = string
 }

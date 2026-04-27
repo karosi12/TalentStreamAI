@@ -16,8 +16,24 @@ class Settings(BaseSettings):
     )
 
     # Loaded from API_HOST, API_PORT, CORS_ORIGINS (see repository root .env / .env.example)
-    api_host: str
-    api_port: int
+    api_host: str | None = Field(default=None)
+    api_port: int | None = Field(default=None)
+    @field_validator("api_host", mode="before")
+    @classmethod
+    def default_api_host(cls, v):
+        # Default to 0.0.0.0 for local/dev, None for Lambda
+        return v if v is not None else ("0.0.0.0" if not cls._running_in_lambda() else None)
+
+    @field_validator("api_port", mode="before")
+    @classmethod
+    def default_api_port(cls, v):
+        # Default to 8000 for local/dev, None for Lambda
+        return v if v is not None else (8000 if not cls._running_in_lambda() else None)
+
+    @staticmethod
+    def _running_in_lambda() -> bool:
+        import os
+        return bool(os.environ.get("AWS_LAMBDA_FUNCTION_NAME"))
     cors_origins: str
     deployment_environment: str | None = None
     # Chat completions: OPENROUTER_API_KEY when using OpenRouter; else OPENAI_API_KEY alone.
@@ -39,8 +55,16 @@ class Settings(BaseSettings):
     max_text_chars: int = 80_000
     max_output_chars: int = 120_000
 
-    sqlite_path: str = ".data/talentstreamai.sqlite3"
-    upload_dir: str = ".data/uploads"
+    @staticmethod
+    def _lambda_path(path: str) -> str:
+        import os
+        if os.environ.get("AWS_LAMBDA_FUNCTION_NAME"):
+            # Use /tmp for Lambda writable storage
+            return f"/tmp/{Path(path).name}"
+        return path
+
+    sqlite_path: str = Field(default_factory=lambda: Settings._lambda_path(".data/talentstreamai.sqlite3"))
+    upload_dir: str = Field(default_factory=lambda: Settings._lambda_path(".data/uploads"))
     sqlite_busy_timeout_ms: int = 5000
     sqlite_enable_wal: bool = True
 
