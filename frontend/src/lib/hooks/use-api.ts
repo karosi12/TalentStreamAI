@@ -112,13 +112,12 @@ export function useTailorApplication() {
  * @param onError - Callback for connection errors
  */
 export function useTailorApplicationStream() {
-  const fetcher = useAuthedFetch();
   const queryClient = useQueryClient();
 
   return useMutation<
     { applicationId: string; documentId: string; matchScore: number },
     Error,
-    { payload: TailorRequest; onProgress?: (event: string, data: any) => void; onError?: (error: Error) => void }
+    { payload: TailorRequest; onProgress?: (event: string, data: unknown) => void; onError?: (error: Error) => void }
   >({
     mutationFn: async ({ payload, onProgress, onError }) => {
       return new Promise((resolve, reject) => {
@@ -127,8 +126,9 @@ export function useTailorApplicationStream() {
 
         const doFetch = async () => {
           try {
-            const token = await (window as any).clerk?.getToken?.() || '';
             const url = buildApiUrl("/api/v1/applications/tailor/stream");
+            const clerk = (window as { clerk?: { getToken?: () => Promise<string> } }).clerk;
+            const token = await clerk?.getToken?.() || '';
             
             const response = await fetch(url, {
               method: "POST",
@@ -205,7 +205,7 @@ export function useTailorApplicationStream() {
                       });
                       return;
                     }
-                  } catch (e) {
+                  } catch {
                     // Ignore JSON parse errors for non-data lines
                   }
                 }
