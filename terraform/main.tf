@@ -292,7 +292,7 @@ resource "aws_apigatewayv2_route" "post_applications" {
   target    = "integrations/${aws_apigatewayv2_integration.lambda.id}"
 }
 
-resource "aws_apigatewayv2_route" "post_applications" {
+resource "aws_apigatewayv2_route" "post_applications_stream" {
   api_id    = aws_apigatewayv2_api.main.id
   route_key = "POST /api/v1/applications/tailor/stream"
   target    = "integrations/${aws_apigatewayv2_integration.lambda.id}"
