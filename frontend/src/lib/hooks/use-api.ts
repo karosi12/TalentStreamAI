@@ -9,6 +9,7 @@ import {
 } from "@tanstack/react-query";
 
 import { apiFetch } from "@/lib/api";
+import { buildApiUrl, ApiError } from "@/lib/api";
 import type {
   Application,
   DashboardStats,
@@ -99,6 +100,131 @@ export function useTailorApplication() {
       queryClient.invalidateQueries({ queryKey: ["resumes"] });
       queryClient.invalidateQueries({ queryKey: ["dashboard-stats"] });
       queryClient.invalidateQueries({ queryKey: ["profile"] });
+    },
+  });
+}
+
+/**
+ * Streaming version of useTailorApplication for production environments.
+ * Uses SSE (Server-Sent Events) to receive incremental progress updates.
+ * 
+ * @param onProgress - Callback receiving SSE events { event, data }
+ * @param onError - Callback for connection errors
+ */
+export function useTailorApplicationStream() {
+  const fetcher = useAuthedFetch();
+  const queryClient = useQueryClient();
+
+  return useMutation<
+    { applicationId: string; documentId: string; matchScore: number },
+    Error,
+    { payload: TailorRequest; onProgress?: (event: string, data: any) => void; onError?: (error: Error) => void }
+  >({
+    mutationFn: async ({ payload, onProgress, onError }) => {
+      return new Promise((resolve, reject) => {
+        const controller = new AbortController();
+        const signal = controller.signal;
+
+        const doFetch = async () => {
+          try {
+            const token = await (window as any).clerk?.getToken?.() || '';
+            const url = buildApiUrl("/api/v1/applications/tailor/stream");
+            
+            const response = await fetch(url, {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                ...(token ? { "Authorization": `Bearer ${token}` } : {}),
+              },
+              body: JSON.stringify(payload),
+              signal,
+            });
+
+            if (!response.ok) {
+              const text = await response.text();
+              let message = response.statusText;
+              try {
+                const parsed = JSON.parse(text);
+                message = parsed.detail || message;
+              } catch {}
+              throw new ApiError(message, response.status);
+            }
+
+            if (!response.body) {
+              throw new Error("ReadableStream not supported in this browser");
+            }
+
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = "";
+
+            while (true) {
+              if (signal.aborted) {
+                reader.cancel();
+                reject(new Error("Request aborted"));
+                return;
+              }
+
+              const { done, value } = await reader.read();
+              if (done) break;
+
+              buffer += decoder.decode(value, { stream: true });
+
+              const lines = buffer.split("\n\n");
+              buffer = lines.pop() || "";
+
+              for (const line of lines) {
+                if (!line.trim()) continue;
+                
+                const eventMatch = line.match(/^event:\\s*(.+)$/);
+                const dataMatch = line.match(/^data:\\s*(.+)$/);
+                
+                if (dataMatch) {
+                  try {
+                    const data = JSON.parse(dataMatch[1]);
+                    const event = eventMatch ? eventMatch[1] : "message";
+                    
+                    onProgress?.(event, data);
+
+                    if (event === "result" || event === "error") {
+                      if (event === "error") {
+                        reject(new Error(data.message || "Tailor failed"));
+                        return;
+                      }
+                      
+                      queryClient.invalidateQueries({ queryKey: ["applications"] });
+                      queryClient.invalidateQueries({ queryKey: ["application", data.app?.id] });
+                      queryClient.invalidateQueries({ queryKey: ["resumes"] });
+                      queryClient.invalidateQueries({ queryKey: ["dashboard-stats"] });
+                      queryClient.invalidateQueries({ queryKey: ["profile"] });
+                      
+                      resolve({
+                        applicationId: data.app?.id,
+                        documentId: data.tailored?.id,
+                        matchScore: data.matchScore,
+                      });
+                      return;
+                    }
+                  } catch (e) {
+                    // Ignore JSON parse errors for non-data lines
+                  }
+                }
+              }
+            }
+
+            reject(new Error("Stream ended without result"));
+          } catch (error) {
+            onError?.(error as Error);
+            reject(error);
+          }
+        };
+
+        doFetch();
+
+        return () => {
+          controller.abort();
+        };
+      });
     },
   });
 }

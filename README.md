@@ -201,6 +201,58 @@ Creates a tailored application from a base resume and job description.
 - `gaps`: Missing keywords and skills
 - `analysis`: Original vs tailored score comparison
 
+### Tailor Application (Streaming Endpoint - Production)
+
+`POST /api/v1/applications/tailor/stream`
+
+Server-sent events (SSE) stream for generating tailored applications with incremental progress.
+Recommended for production use to avoid API Gateway/Lambda timeouts.
+
+**Request Body**: Same as `POST /api/v1/applications/tailor`
+
+**Stream Events**:
+- `status`: `{"stage": "fetching_job"}` - Fetching job description from URL
+- `gap_analysis`: `{"missing_keywords": [...], "matched_keywords": [...]}` - Keyword gap analysis
+- `resume`: `{"content": "..."}` - Tailored resume content (intermediate)
+- `cover_letter`: `{"content": "..."}` - Generated cover letter (intermediate)
+- `gmail_draft`: `{"content": "..."}` - Email draft (intermediate)
+- `status`: `{"stage": "saving"}` - Persisting results to database
+- `status`: `{"stage": "completed", "application_id": "...", "document_id": "...", "match_score": 95}` - Final completion
+- `result`: `{"app": {...}, "tailored": {...}, "match_score": 95, ...}` - Final result with all data
+- `error`: `{"message": "..."`} - Error event (if something fails)
+
+**Content-Type**: `text/event-stream`
+
+**Example Usage (JavaScript)**:
+```javascript
+const response = await fetch('/api/v1/applications/tailor/stream', {
+  method: 'POST',
+  headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer <token>'},
+  body: JSON.stringify({base_resume_id: 'uuid', job_url: 'https://...'})
+});
+
+const reader = response.body.getReader();
+const decoder = new TextDecoder();
+let buffer = '';
+
+while (true) {
+  const {done, value} = await reader.read();
+  if (done) break;
+  buffer += decoder.decode(value, {stream: true});
+  const lines = buffer.split('\n\n');
+  buffer = lines.pop();
+  for (const line of lines) {
+    const eventMatch = line.match(/^event:\s*(.+)$/m);
+    const dataMatch = line.match(/^data:\s*(.+)$/m);
+    if (dataMatch) {
+      const data = JSON.parse(dataMatch[1]);
+      const event = eventMatch ? eventMatch[1] : 'message';
+      console.log(event, data);
+    }
+  }
+}
+```
+
 ### Generate Stream
 
 `POST /api/v1/generate/stream`
