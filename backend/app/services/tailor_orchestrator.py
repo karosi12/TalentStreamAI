@@ -27,7 +27,7 @@ from app.services.langgraph.streaming_agent import (
     run_tailor_pipeline,
     stream_generation,
 )
-from app.services.job_fetcher import fetch_job_description
+from app.tools.job_fetcher import fetch_job_description
 
 slog = structlog.get_logger(__name__)
 
