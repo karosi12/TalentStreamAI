@@ -13,11 +13,89 @@ import { buildApiUrl, ApiError } from "@/lib/api";
 import type {
   Application,
   DashboardStats,
+  GapItem,
+  MatchAnalysis,
   Profile,
   Resume,
   TailorRequest,
   TailorResponse,
 } from "@/lib/types";
+
+function normalizeSseNewlines(s: string): string {
+  return s.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+}
+
+/** One SSE message (after optional CRLF normalization). */
+function parseSseMessageBlock(block: string): { event: string; dataRaw: string } | null {
+  const lines = block.trimEnd().split("\n");
+  let eventName = "message";
+  const dataLines: string[] = [];
+  for (const line of lines) {
+    if (line.startsWith("event:")) {
+      eventName = line.slice(6).trim();
+    } else if (line.startsWith("data:")) {
+      dataLines.push(line.slice(5).trimStart());
+    }
+  }
+  if (dataLines.length === 0) return null;
+  return { event: eventName, dataRaw: dataLines.join("\n").trim() };
+}
+
+/**
+ * Leave `buffer` as the trailing incomplete slice; return complete `\n\n`-delimited blocks.
+ */
+function pullCompleteSseBlocks(buffer: string): { pending: string; blocks: string[] } {
+  const n = normalizeSseNewlines(buffer);
+  const sep = n.lastIndexOf("\n\n");
+  if (sep === -1) {
+    return { pending: n, blocks: [] };
+  }
+  const head = n.slice(0, sep);
+  const pending = n.slice(sep + 2);
+  const blocks = head.split("\n\n").filter((b) => b.trim());
+  return { pending, blocks };
+}
+
+function mapTailorStreamPayload(raw: unknown): TailorResponse {
+  const data = raw as Record<string, unknown>;
+  const app = (data.app ?? {}) as Record<string, unknown>;
+  const tailored = (data.tailored ?? {}) as Record<string, unknown>;
+  const de = (data.draft_email ?? {}) as Record<string, unknown>;
+  const matchScore = Number(data.match_score ?? app.match_score ?? 0);
+  const analysis = (data.analysis ?? null) as MatchAnalysis | null;
+  const gaps = (Array.isArray(data.gaps) ? data.gaps : []) as GapItem[];
+  const appId = String(app.id ?? "");
+  const docId = String(tailored.id ?? "");
+  return {
+    applicationId: appId,
+    matchScore,
+    resume: {
+      id: docId,
+      content: String(tailored.text ?? ""),
+      title: String(app.position ?? "") || "Tailored resume",
+      isBase: false,
+      createdAt: new Date().toISOString(),
+      applicationId: appId,
+    },
+    coverLetter: String(data.cover_letter ?? ""),
+    draftEmail: {
+      subject: String(de.subject ?? "Application"),
+      body: String(de.body ?? ""),
+    },
+    gaps,
+    analysis: analysis ?? {
+      originalScore: 60,
+      tailoredScore: matchScore,
+      improvement: Math.max(0, matchScore - 60),
+      whatWeImproved: [],
+      strengths: [],
+      remainingDeficits: [],
+      matchedKeywords: [],
+      missingKeywords: [],
+      suggestions: [],
+    },
+  };
+}
 
 function useAuthedFetch() {
   const { getToken } = useAuth();
@@ -112,10 +190,11 @@ export function useTailorApplication() {
  * @param onError - Callback for connection errors
  */
 export function useTailorApplicationStream() {
+  const { getToken } = useAuth();
   const queryClient = useQueryClient();
 
   return useMutation<
-    { applicationId: string; documentId: string; matchScore: number },
+    TailorResponse,
     Error,
     { payload: TailorRequest; onProgress?: (event: string, data: unknown) => void; onError?: (error: Error) => void }
   >({
@@ -127,13 +206,13 @@ export function useTailorApplicationStream() {
         const doFetch = async () => {
           try {
             const url = buildApiUrl("/api/v1/applications/tailor/stream");
-            const clerk = (window as { clerk?: { getToken?: () => Promise<string> } }).clerk;
-            const token = await clerk?.getToken?.() || '';
+            const token = await getToken();
             
             const response = await fetch(url, {
               method: "POST",
               headers: {
                 "Content-Type": "application/json",
+                Accept: "text/event-stream",
                 ...(token ? { "Authorization": `Bearer ${token}` } : {}),
               },
               body: JSON.stringify(payload),
@@ -158,6 +237,60 @@ export function useTailorApplicationStream() {
             const decoder = new TextDecoder();
             let buffer = "";
 
+            const handleParsedEvent = (event: string, data: unknown): boolean => {
+              onProgress?.(event, data);
+              if (event === "error") {
+                const msg =
+                  typeof data === "object" &&
+                  data !== null &&
+                  "message" in data &&
+                  typeof (data as { message: unknown }).message === "string"
+                    ? (data as { message: string }).message
+                    : "Tailor failed";
+                reject(new Error(msg));
+                return true;
+              }
+              if (event === "result") {
+                queryClient.invalidateQueries({ queryKey: ["applications"] });
+                const appId =
+                  typeof data === "object" &&
+                  data !== null &&
+                  "app" in data &&
+                  typeof (data as { app: { id?: string } }).app?.id === "string"
+                    ? (data as { app: { id: string } }).app.id
+                    : undefined;
+                if (appId) {
+                  queryClient.invalidateQueries({ queryKey: ["application", appId] });
+                }
+                queryClient.invalidateQueries({ queryKey: ["resumes"] });
+                queryClient.invalidateQueries({ queryKey: ["dashboard-stats"] });
+                queryClient.invalidateQueries({ queryKey: ["profile"] });
+                resolve(mapTailorStreamPayload(data));
+                return true;
+              }
+              return false;
+            };
+
+            const dispatchBlock = (block: string): boolean => {
+              const frame = parseSseMessageBlock(block);
+              if (!frame) return false;
+              try {
+                const data = JSON.parse(frame.dataRaw) as unknown;
+                return handleParsedEvent(frame.event, data);
+              } catch {
+                return false;
+              }
+            };
+
+            const drainCompleteBlocks = (): boolean => {
+              const { pending, blocks } = pullCompleteSseBlocks(buffer);
+              buffer = pending;
+              for (const block of blocks) {
+                if (dispatchBlock(block)) return true;
+              }
+              return false;
+            };
+
             while (true) {
               if (signal.aborted) {
                 reader.cancel();
@@ -166,64 +299,34 @@ export function useTailorApplicationStream() {
               }
 
               const { done, value } = await reader.read();
-              if (done) break;
+              if (value) {
+                buffer = normalizeSseNewlines(
+                  buffer + decoder.decode(value, { stream: true }),
+                );
+              }
+              if (drainCompleteBlocks()) return;
 
-              buffer += decoder.decode(value, { stream: true });
-
-              const lines = buffer.split("\n\n");
-              buffer = lines.pop() || "";
-
-              for (const line of lines) {
-                if (!line.trim()) continue;
-                
-                const eventMatch = line.match(/^event:\\s*(.+)$/);
-                const dataMatch = line.match(/^data:\\s*(.+)$/);
-                
-                if (dataMatch) {
-                  try {
-                    const data = JSON.parse(dataMatch[1]);
-                    const event = eventMatch ? eventMatch[1] : "message";
-                    
-                    onProgress?.(event, data);
-
-                    if (event === "result" || event === "error") {
-                      if (event === "error") {
-                        reject(new Error(data.message || "Tailor failed"));
-                        return;
-                      }
-                      
-                      queryClient.invalidateQueries({ queryKey: ["applications"] });
-                      queryClient.invalidateQueries({ queryKey: ["application", data.app?.id] });
-                      queryClient.invalidateQueries({ queryKey: ["resumes"] });
-                      queryClient.invalidateQueries({ queryKey: ["dashboard-stats"] });
-                      queryClient.invalidateQueries({ queryKey: ["profile"] });
-                      
-                      resolve({
-                        applicationId: data.app?.id,
-                        documentId: data.tailored?.id,
-                        matchScore: data.matchScore,
-                      });
-                      return;
-                    }
-                  } catch {
-                    // Ignore JSON parse errors for non-data lines
-                  }
+              if (done) {
+                buffer = normalizeSseNewlines(buffer + decoder.decode());
+                const tailBlocks = buffer.split("\n\n").filter((b) => b.trim());
+                buffer = "";
+                for (let i = 0; i < tailBlocks.length; i++) {
+                  const block = tailBlocks[i];
+                  const isLast = i === tailBlocks.length - 1;
+                  if (isLast && !block.includes("data:")) continue;
+                  if (dispatchBlock(block)) return;
                 }
+                reject(new Error("Stream ended without result"));
+                return;
               }
             }
-
-            reject(new Error("Stream ended without result"));
           } catch (error) {
             onError?.(error as Error);
             reject(error);
           }
         };
 
-        doFetch();
-
-        return () => {
-          controller.abort();
-        };
+        void doFetch();
       });
     },
   });

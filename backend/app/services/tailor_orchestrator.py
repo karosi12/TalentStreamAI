@@ -4,6 +4,7 @@ Orchestrates a single "tailor" run for the product API: job resolution, LangGrap
 
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 from typing import Any
@@ -249,13 +250,23 @@ async def stream_tailor_for_user(
     async for line in stream_generation(resume_text=resume_text, job_description_text=jd_text):
         yield line
 
-    # Now collect the final state by running the full pipeline
-    try:
-        state = await run_tailor_pipeline(
+    # Second full pipeline run (persisted path). This can take a long time with no other
+    # events; proxies and browsers may close idle streams. Emit status + SSE comment pings.
+    yield _sse("status", {"stage": "finalizing"})
+    task = asyncio.create_task(
+        run_tailor_pipeline(
             resume_text=resume_text,
             job_description_text=jd_text,
         )
-    except Exception as e:
+    )
+    try:
+        while True:
+            try:
+                state = await asyncio.wait_for(asyncio.shield(task), timeout=15.0)
+                break
+            except asyncio.TimeoutError:
+                yield ": keepalive"
+    except Exception:
         metrics.tailor_runs.labels("error").inc()
         slog.exception("tailor_pipeline_failed", base_resume_id=base_resume_id)
         yield _sse("error", {"message": "Tailor pipeline failed; please retry or contact support."})
@@ -307,6 +318,7 @@ async def stream_tailor_for_user(
         file_path=None,
         meta={"title": title, "is_base": False, "source": "tailor", "base_resume_id": base_resume_id},
     )
+    yield ": keepalive"
 
     app = await run_in_threadpool(
         create_application,
@@ -322,6 +334,7 @@ async def stream_tailor_for_user(
         cover_letter=cover_letter[: settings.max_output_chars],
         meta=app_meta,
     )
+    yield ": keepalive"
 
     await run_in_threadpool(
         update_document_meta,
