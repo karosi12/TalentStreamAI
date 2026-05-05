@@ -1,13 +1,27 @@
 #!/bin/bash
 set -e
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
 ENVIRONMENT=${1:-dev}          # dev | test | prod
 PROJECT_NAME=${2:-talentstreamai}
+
+# Load repo-root .env (OPENAI_API_KEY, CLERK_*, DEFAULT_AWS_REGION, etc.) if present.
+# Pass ./deploy-aws.sh prod to override ENVIRONMENT / PROJECT_NAME from .env.
+if [[ -f "$REPO_ROOT/.env" ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  source "$REPO_ROOT/.env"
+  set +a
+fi
+ENVIRONMENT=${1:-${ENVIRONMENT:-dev}}
+PROJECT_NAME=${2:-${PROJECT_NAME:-talentstreamai}}
 
 echo "🚀 Deploying ${PROJECT_NAME} to ${ENVIRONMENT}..."
 
 # 1. Build Lambda package
-cd "$(dirname "$0")/.."        # project root
+cd "$REPO_ROOT"
 echo "📦 Building Lambda package..."
 (cd backend && uv run deploy.py)
 
@@ -47,22 +61,21 @@ fi
 cd terraform
 # terraform init -input=false
 AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
-AWS_REGION=${DEFAULT_AWS_REGION:-us-east-1}
-OPENAI_API_KEY=${OPENAI_API_KEY}
-CLERK_JWKS_URL=${CLERK_JWKS_URL}
-CLERK_ISSUER=${CLERK_ISSUER}
-AGENT_MODE=${AGENT_MODE}
-LLM_BASE_URL=${LLM_BASE_URL}
-S3_PREFIX=${S3_PREFIX}
-S3_SSE=${S3_SSE}
-UPLOAD_STORAGE=${UPLOAD_STORAGE}
+AWS_REGION="${AWS_REGION:-${DEFAULT_AWS_REGION:-us-east-1}}"
+# Terraform / Lambda (from shell or from sourced .env)
+: "${OPENAI_API_KEY:?Set OPENAI_API_KEY in the environment or in $REPO_ROOT/.env}"
+: "${CLERK_JWKS_URL:?Set CLERK_JWKS_URL in the environment or in $REPO_ROOT/.env}"
+: "${CLERK_ISSUER:?Set CLERK_ISSUER in the environment or in $REPO_ROOT/.env}"
+AGENT_MODE="${AGENT_MODE:-llm}"
+LLM_BASE_URL="${LLM_BASE_URL:-https://api.openai.com}"
+S3_PREFIX="${S3_PREFIX:-uploads/}"
+S3_SSE="${S3_SSE:-AES256}"
+UPLOAD_STORAGE="${UPLOAD_STORAGE:-s3}"
 
-terraform fmt && terraform init -input=false \
+terraform fmt && terraform init -migrate-state -input=false \
   -backend-config="bucket=talentstreamai-terraform-state-${AWS_ACCOUNT_ID}" \
   -backend-config="key=talentstreamai/${ENVIRONMENT}/terraform.tfstate" \
-  -backend-config="region=${AWS_REGION}" \
-  -backend-config="dynamodb_table=talentstreamai-terraform-locks" \
-  -backend-config="encrypt=true"
+  -backend-config="region=${AWS_REGION}"
 
 if ! terraform workspace list | grep -q "$ENVIRONMENT"; then
   terraform workspace new "$ENVIRONMENT"
@@ -71,7 +84,7 @@ else
 fi
 
 cat > lambda-function-vars.tfvars <<EOF
-aws_region = "${DEFAULT_AWS_REGION:-us-east-1}"
+aws_region = "${AWS_REGION}"
 openai_api_key = "${OPENAI_API_KEY}"
 clerk_jwks_url = "${CLERK_JWKS_URL}"
 clerk_issuer = "${CLERK_ISSUER}"

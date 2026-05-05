@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import StreamingResponse
 
 from app.api.schemas.frontend import (
     ApplicationOut,
@@ -15,7 +16,7 @@ from app.api.schemas.frontend import (
 )
 from app.core.auth import AuthenticatedUser, get_current_user
 from app.core.db import get_application, list_applications
-from app.services.tailor_orchestrator import run_tailor_for_user
+from app.services.tailor_orchestrator import run_tailor_for_user, stream_tailor_for_user
 
 router = APIRouter()
 log = structlog.get_logger(__name__)
@@ -85,4 +86,41 @@ async def tailor_application(
         ),
         gaps=gap_items,
         analysis=map_match_analysis(pl["analysis"]),
+    )
+
+
+@router.post("/applications/tailor/stream")
+async def tailor_application_stream(
+    body: TailorRequestIn,
+    user: AuthenticatedUser = Depends(get_current_user),
+) -> StreamingResponse:
+    """
+    Streaming version of the tailor endpoint.
+    Yields Server-Sent Events (SSE) with incremental progress:
+    - status events (fetching_job, started, saving, completed)
+    - generation progress (gap_analysis, resume, cover_letter, gmail_draft)
+    - error events if something fails
+    - final result event with persisted application data
+    """
+
+    async def event_stream():
+        try:
+            async for line in stream_tailor_for_user(
+                user_id=user.user_id,
+                base_resume_id=body.base_resume_id,
+                job_url=body.job_url,
+                job_description=body.job_description,
+            ):
+                yield f"{line}\n\n"
+        except Exception as e:
+            log.exception("tailor_stream_failed")
+            yield 'event: error\ndata: {"message":"tailor_stream_failed"}\n\n'
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
     )

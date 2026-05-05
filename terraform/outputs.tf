@@ -1,26 +1,26 @@
 output "api_gateway_url" {
   description = "URL of the API Gateway"
-  value       = aws_apigatewayv2_api.main.api_endpoint
+  value       = module.api.api_gateway_url
 }
 
 output "cloudfront_url" {
   description = "URL of the CloudFront distribution"
-  value       = "https://${aws_cloudfront_distribution.main.domain_name}"
+  value       = "https://${module.cdn.distribution_domain_name}"
 }
 
 output "s3_frontend_bucket" {
   description = "Name of the S3 bucket for frontend"
-  value       = aws_s3_bucket.frontend.id
+  value       = module.s3_frontend.bucket_id
 }
 
 output "s3_resume_storage_bucket" {
   description = "Name of the S3 bucket for resume storage"
-  value       = aws_s3_bucket.resume_storage.id
+  value       = module.s3_resume.bucket_id
 }
 
 output "lambda_function_name" {
   description = "Name of the Lambda function"
-  value       = aws_lambda_function.api.function_name
+  value       = module.api.lambda_function_name
 }
 
 output "custom_domain_url" {
