@@ -27,9 +27,7 @@ echo "🔧 Initializing Terraform with S3 backend..."
 terraform init -input=false \
   -backend-config="bucket=talentstreamai-terraform-state-${AWS_ACCOUNT_ID}" \
   -backend-config="key=talentstreamai/${ENVIRONMENT}/terraform.tfstate" \
-  -backend-config="region=${AWS_REGION}" \
-  -backend-config="dynamodb_table=talentstreamai-terraform-locks" \
-  -backend-config="encrypt=true"
+  -backend-config="region=${AWS_REGION}"
 
 # Check if workspace exists
 if ! terraform workspace list | grep -q "$ENVIRONMENT"; then
